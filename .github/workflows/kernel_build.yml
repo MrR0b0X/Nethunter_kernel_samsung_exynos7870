@@ -5,7 +5,7 @@ on:
     inputs:
       run_command:
         description: 'Build flags'
-        default: 'kver=1 zipn=Nethunter-gtaxlte-3.18.140 bash kramel.sh img dtb mkzip'
+        default: 'kver=1 zipn=Nethunter-gtaxlte-3.18.140 bash kramel.sh img dtb hdr mkzip'
         required: true
       use_telegram:
         description: 'Use telegram (requires TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID secrets)'
@@ -48,6 +48,12 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v3
+
+      - name: Set up QEMU for ARM64 emulation
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y qemu-user-static binfmt-support
+          sudo update-binfmts --enable qemu-aarch64
 
       - name: Run Custom Dependencies
         if: ${{ github.event.inputs.dependencies_command != '' }}

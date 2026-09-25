@@ -130,6 +130,78 @@ jobs:
         run: |
           sed -i "s|CHATID=[^/ ]*|CHATID=${{ secrets.TELEGRAM_CHAT_ID }}|" kramel.sh
 
+      - name: Detect compiler cache directories
+        id: detect-compiler
+        shell: bash
+        run: |
+          set -e
+
+          # Read the compiler selected by kramel.sh.
+          COMPILER=$(grep -oP '^export COMPILER=\K.*' kramel.sh | head -n 1 | tr -d '"[:space:]')
+          if [ -z "$COMPILER" ]; then
+            echo "Could not determine COMPILER from kramel.sh"
+            exit 1
+          fi
+
+          echo "Selected compiler: $COMPILER"
+
+          # Isolate only the selected compiler branch and collect the directories
+          # that kramel.sh creates/downloads with a "${KDIR}/..." existence check.
+          case "$COMPILER" in
+            gcc)
+              COMPILER_BLOCK=$(awk '
+                /if \[\[ "\$\{COMPILER\}" = gcc \]\]; then/ { in_block=1; print; next }
+                /elif \[\[ "\$\{COMPILER\}" = clang \]\]; then/ { in_block=0 }
+                in_block { print }
+              ' kramel.sh)
+              ;;
+            clang)
+              COMPILER_BLOCK=$(awk '
+                /elif \[\[ "\$\{COMPILER\}" = clang \]\]; then/ { in_block=1; print; next }
+                /^fi$/ && in_block { print; exit }
+                in_block { print }
+              ' kramel.sh)
+              ;;
+            *)
+              echo "Unsupported compiler selector: $COMPILER"
+              exit 1
+              ;;
+          esac
+
+          # This deliberately detects directory names only.
+          # No clang/gcc binary is executed and no compiler version is queried.
+          COMPILER_DIRS=$(printf '%s\n' "$COMPILER_BLOCK" |
+            grep -E 'if \[\[? ! -d "\$\{KDIR\}/|if \[ ! -d "\$\{KDIR\}/' |
+            sed -E 's/.*\$\{KDIR\}\/([^"]+)".*/\1/' |
+            sed '/^$/d' |
+            sort -u)
+
+          if [ -z "$COMPILER_DIRS" ]; then
+            echo "No compiler directory was detected in the selected kramel.sh branch."
+            exit 1
+          fi
+
+          echo "Detected compiler directory/directories:"
+          printf '  %s\n' $COMPILER_DIRS
+
+          {
+            echo 'paths<<EOF'
+            for dir in $COMPILER_DIRS; do
+              echo "$dir"
+            done
+            echo EOF
+          } >> "$GITHUB_OUTPUT"
+
+          CACHE_NAME=$(printf '%s\n' $COMPILER_DIRS | paste -sd+ -)
+          echo "cache_name=$CACHE_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Restore compiler cache
+        id: cache-compiler-restore
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ steps.detect-compiler.outputs.paths }}
+          key: compiler-${{ steps.detect-compiler.outputs.cache_name }}
+
       - name: Build kernel
         run: |
           eval "${{ github.event.inputs.run_command }}"
@@ -179,6 +251,45 @@ jobs:
             echo "Error: boot.img not found"
             exit 1
           fi
+
+      - name: Verify compiler directories
+        if: always() && steps.cache-compiler-restore.outputs.cache-hit != 'true'
+        id: verify-compiler
+        shell: bash
+        run: |
+          set -e
+
+          valid=false
+
+          while IFS= read -r dir; do
+            [ -z "$dir" ] && continue
+
+            if [ ! -d "$dir/bin" ]; then
+              echo "Missing compiler bin directory: $dir/bin"
+              continue
+            fi
+
+            # Check for the expected compiler executable shape only.
+            # Do NOT execute clang --version or *-gcc --version.
+            if [ -x "$dir/bin/clang" ] ||
+               find "$dir/bin" -maxdepth 1 -type f -name '*-gcc' -perm -111 -print -quit | grep -q .; then
+              echo "Valid compiler directory: $dir"
+              valid=true
+            else
+              echo "No clang or *-gcc executable found in: $dir/bin"
+            fi
+          done <<'EOF'
+          ${{ steps.detect-compiler.outputs.paths }}
+          EOF
+
+          echo "compiler_valid=$valid" >> "$GITHUB_OUTPUT"
+
+      - name: Save compiler cache
+        if: always() && steps.verify-compiler.outputs.compiler_valid == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ steps.detect-compiler.outputs.paths }}
+          key: compiler-${{ steps.detect-compiler.outputs.cache_name }}
 
       - name: Parse Release Information
         if: ${{ github.event.inputs.create_release == 'true' }}

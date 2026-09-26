@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2014, 2015, 2016 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2018 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -38,7 +38,7 @@
 
 #define MAX_HTC_RX_BUNDLE  2
 
-#ifdef DEBUG
+#ifdef WLAN_DEBUG
 static ATH_DEBUG_MASK_DESCRIPTION g_HTCDebugDescription[] = {
     { ATH_DEBUG_SEND , "Send"},
     { ATH_DEBUG_RECV , "Recv"},
@@ -65,7 +65,7 @@ static void DestroyHTCTxCtrlPacket(HTC_PACKET *pPacket)
 {
     adf_nbuf_t netbuf;
     netbuf = (adf_nbuf_t)GET_HTC_PACKET_NET_BUF_CONTEXT(pPacket);
-    AR_DEBUG_PRINTF(ATH_DEBUG_TRC, ("free ctrl netbuf :0x%p \n", netbuf));
+    AR_DEBUG_PRINTF(ATH_DEBUG_TRC, ("free ctrl netbuf :0x%pK \n", netbuf));
     if (netbuf != NULL) {
         adf_nbuf_free(netbuf);
     }
@@ -92,7 +92,7 @@ static HTC_PACKET *BuildHTCTxCtrlPacket(adf_os_device_t osdev)
 	        adf_os_print("%s: nbuf alloc failed\n",__func__);
             break;
         }
-        AR_DEBUG_PRINTF(ATH_DEBUG_TRC, ("alloc ctrl netbuf :0x%p \n", netbuf));
+        AR_DEBUG_PRINTF(ATH_DEBUG_TRC, ("alloc ctrl netbuf :0x%pK \n", netbuf));
         SET_HTC_PACKET_NET_BUF_CONTEXT(pPacket, netbuf);
     } while (FALSE);
 
@@ -146,6 +146,7 @@ static void HTCCleanup(HTC_TARGET *target)
 {
     HTC_PACKET *pPacket;
     adf_nbuf_t netbuf;
+    int j;
 
     if (target->hif_dev != NULL) {
         HIFDetachHTC(target->hif_dev);
@@ -209,6 +210,11 @@ static void HTCCleanup(HTC_TARGET *target)
     adf_os_spinlock_destroy(&target->HTCTxLock);
     adf_os_spinlock_destroy(&target->HTCCreditLock);
 
+    for (j = 0; j < ENDPOINT_MAX; j++) {
+        HTC_ENDPOINT *endpoint = &target->EndPoint[j];
+        adf_os_spinlock_destroy(&endpoint->htc_endpoint_rx_lock);
+    }
+
     /* free our instance */
     A_FREE(target);
 }
@@ -220,9 +226,9 @@ HTC_HANDLE HTCCreate(void *ol_sc, HTC_INIT_INFO *pInfo, adf_os_device_t osdev)
     MSG_BASED_HIF_CALLBACKS htcCallbacks;
     HTC_ENDPOINT            *pEndpoint=NULL;
     HTC_TARGET              *target = NULL;
-    int                     i;
+    int                     i, j;
 
-    AR_DEBUG_PRINTF(ATH_DEBUG_INFO, ("+HTCCreate ..  HIF :%p \n",hHIF));
+    AR_DEBUG_PRINTF(ATH_DEBUG_INFO, ("+HTCCreate ..  HIF :%pK \n",hHIF));
 
     A_REGISTER_MODULE_DEBUG_INFO(htc);
 
@@ -238,10 +244,18 @@ HTC_HANDLE HTCCreate(void *ol_sc, HTC_INIT_INFO *pInfo, adf_os_device_t osdev)
     adf_os_spinlock_init(&target->HTCTxLock);
     adf_os_spinlock_init(&target->HTCCreditLock);
 
+    for (j = 0; j < ENDPOINT_MAX; j++) {
+        pEndpoint = &target->EndPoint[j];
+        adf_os_spinlock_init(&pEndpoint->htc_endpoint_rx_lock);
+    }
+    target->is_nodrop_pkt = FALSE;
+#ifdef HIF_SDIO
+    target->enable_b2b = FALSE;
+#endif
     do {
         A_MEMCPY(&target->HTCInitInfo,pInfo,sizeof(HTC_INIT_INFO));
         target->host_handle = pInfo->pContext;
-		target->osdev = osdev;
+        target->osdev = osdev;
 
         ResetEndpointStates(target);
 
@@ -285,7 +299,7 @@ HTC_HANDLE HTCCreate(void *ol_sc, HTC_INIT_INFO *pInfo, adf_os_device_t osdev)
 
     HTCRecvInit(target);
 
-    AR_DEBUG_PRINTF(ATH_DEBUG_INFO, ("-HTCCreate (0x%p) \n", target));
+    AR_DEBUG_PRINTF(ATH_DEBUG_INFO, ("-HTCCreate (0x%pK) \n", target));
 
     return (HTC_HANDLE)target;
 }
@@ -293,7 +307,7 @@ HTC_HANDLE HTCCreate(void *ol_sc, HTC_INIT_INFO *pInfo, adf_os_device_t osdev)
 void  HTCDestroy(HTC_HANDLE HTCHandle)
 {
     HTC_TARGET *target = GET_HTC_TARGET_FROM_HANDLE(HTCHandle);
-    AR_DEBUG_PRINTF(ATH_DEBUG_TRC, ("+HTCDestroy ..  Destroying :0x%p \n",target));
+    AR_DEBUG_PRINTF(ATH_DEBUG_TRC, ("+HTCDestroy ..  Destroying :0x%pK \n",target));
     HIFStop(HTCGetHifDevice(HTCHandle));
     HTCCleanup(target);
     AR_DEBUG_PRINTF(ATH_DEBUG_TRC, ("-HTCDestroy \n"));
@@ -310,7 +324,7 @@ void *HTCGetHifDevice(HTC_HANDLE HTCHandle)
 void HTCControlTxComplete(void *Context, HTC_PACKET *pPacket)
 {
     HTC_TARGET *target = (HTC_TARGET *)Context;
-    AR_DEBUG_PRINTF(ATH_DEBUG_TRC,("+-HTCControlTxComplete 0x%p (l:%d) \n",pPacket,pPacket->ActualLength));
+    AR_DEBUG_PRINTF(ATH_DEBUG_TRC,("+-HTCControlTxComplete 0x%pK (l:%d) \n",pPacket,pPacket->ActualLength));
     HTCFreeControlTxPacket(target,pPacket);
 }
 
@@ -527,7 +541,7 @@ A_STATUS HTCWaitTarget(HTC_HANDLE HTCHandle)
     A_UINT8 i = 0;
     HTC_PACKET *pRxBundlePacket, *pTempBundlePacket;
 
-    AR_DEBUG_PRINTF(ATH_DEBUG_TRC, ("HTCWaitTarget - Enter (target:0x%p) \n", HTCHandle));
+    AR_DEBUG_PRINTF(ATH_DEBUG_TRC, ("HTCWaitTarget - Enter (target:0x%pK) \n", HTCHandle));
     AR_DEBUG_PRINTF(ATH_DEBUG_ANY, ("+HWT\n"));
 
     do {
@@ -940,9 +954,6 @@ void HTCSetTargetToSleep(void *context)
     HIFSetTargetSleep(sc->hif_hdl, true, false);
 #endif
 #endif
-#elif defined(HIF_SDIO)
-    struct ol_softc *sc = (struct ol_softc *)context;
-    HIFSetTargetSleep(sc->hif_hdl, true, false);
 #endif
 }
 

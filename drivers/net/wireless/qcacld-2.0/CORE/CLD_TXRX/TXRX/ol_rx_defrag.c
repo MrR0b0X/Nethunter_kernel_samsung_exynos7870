@@ -296,8 +296,8 @@ ol_rx_reorder_store_frag(
     more_frag = mac_hdr->i_fc[1] & IEEE80211_FC1_MORE_FRAG;
 
     if ((!more_frag) && (!fragno) && (!rx_reorder_array_elem->head)) {
-        rx_reorder_array_elem->head = frag;
-        rx_reorder_array_elem->tail = frag;
+        ol_rx_fraglist_insert(htt_pdev, &rx_reorder_array_elem->head,
+            &rx_reorder_array_elem->tail, frag, &all_frag_present);
         adf_nbuf_set_next(frag, NULL);
         ol_rx_defrag(pdev, peer, tid, rx_reorder_array_elem->head);
         rx_reorder_array_elem->head = NULL;
@@ -1061,6 +1061,7 @@ ol_rx_defrag_decap_recombine(
     adf_nbuf_set_next(rx_nbuf, NULL);
     while (msdu) {
         htt_rx_msdu_desc_free(htt_pdev, msdu);
+        adf_net_buf_debug_release_skb(msdu);
         tmp = adf_nbuf_next(msdu);
         adf_nbuf_set_next(msdu, NULL);
         OL_RX_FRAG_PULL_HDR(htt_pdev, msdu, hdrsize);

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2015 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2017 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -381,11 +381,11 @@ static void usb_hif_flush_pending_transfers(HIF_USB_PIPE *pipe)
 					("urb_context is NULL\n"));
 			break;
 		}
-		AR_DEBUG_PRINTF(ATH_DEBUG_TRC, ("  pending urb ctxt: 0x%p\n",
+		AR_DEBUG_PRINTF(ATH_DEBUG_TRC, ("  pending urb ctxt: 0x%pK\n",
 						urb_context));
 		if (urb_context->urb != NULL) {
 			AR_DEBUG_PRINTF(ATH_DEBUG_TRC,
-					("  killing urb: 0x%p\n",
+					("  killing urb: 0x%pK\n",
 					 urb_context->urb));
 			/* killing the URB will cause the completion routines to
 			 * run
@@ -439,9 +439,10 @@ static void usb_hif_usb_recv_prestart_complete(struct urb *urb)
 	A_STATUS status = A_OK;
 	adf_nbuf_t buf = NULL;
 	HIF_USB_PIPE *pipe = urb_context->pipe;
+	unsigned long flags;
 
 	AR_DEBUG_PRINTF(USB_HIF_DEBUG_BULK_IN, (
-				"+%s: recv pipe: %d, stat:%d,len:%d urb:0x%p\n",
+				"+%s: recv pipe: %d, stat:%d,len:%d urb:0x%pK\n",
 				__func__,
 				pipe->logical_pipe_num,
 				urb->status, urb->actual_length,
@@ -501,9 +502,11 @@ static void usb_hif_usb_recv_prestart_complete(struct urb *urb)
 	usb_hif_cleanup_recv_urb(urb_context);
 
 	/* Prestart URBs runs out and now start working receive pipe. */
+	spin_lock_irqsave(&pipe->device->rx_prestart_lock, flags);
 	if (--pipe->urb_prestart_cnt == 0) {
 		usb_hif_start_recv_pipes(pipe->device);
 	}
+	spin_unlock_irqrestore(&pipe->device->rx_prestart_lock, flags);
 
 	AR_DEBUG_PRINTF(USB_HIF_DEBUG_BULK_IN, ("-%s\n", __func__));
 }
@@ -516,7 +519,7 @@ static void usb_hif_usb_recv_complete(struct urb *urb)
 	HIF_USB_PIPE *pipe = urb_context->pipe;
 
 	AR_DEBUG_PRINTF(USB_HIF_DEBUG_BULK_IN, (
-			 "+%s: recv pipe: %d, stat:%d,len:%d urb:0x%p\n",
+			 "+%s: recv pipe: %d, stat:%d,len:%d urb:0x%pK\n",
 			 __func__,
 			 pipe->logical_pipe_num,
 			 urb->status, urb->actual_length,
@@ -616,7 +619,7 @@ static void usb_hif_usb_recv_bundle_complete(struct urb *urb)
 	adf_nbuf_t new_skb = NULL;
 
 	AR_DEBUG_PRINTF(USB_HIF_DEBUG_BULK_IN, (
-			 "+%s: recv pipe: %d, stat:%d,len:%d urb:0x%p\n",
+			 "+%s: recv pipe: %d, stat:%d,len:%d urb:0x%pK\n",
 			 __func__,
 			 pipe->logical_pipe_num,
 			 urb->status, urb->actual_length,
@@ -758,9 +761,11 @@ static void usb_hif_post_recv_prestart_transfers(HIF_USB_PIPE *recv_pipe,
 	a_uint32_t len;
 	struct urb *urb;
 	int i, usb_status, buffer_length = HIF_USB_RX_BUFFER_SIZE;
+	unsigned long flags;
 
 	AR_DEBUG_PRINTF(ATH_DEBUG_TRC, ("+%s\n", __func__));
 
+	spin_lock_irqsave(&recv_pipe->device->rx_prestart_lock, flags);
 	for (i = 0; i < prestart_urb; i++) {
 		urb_context = usb_hif_alloc_urb_from_pipe(recv_pipe);
 		if (NULL == urb_context)
@@ -786,7 +791,7 @@ static void usb_hif_post_recv_prestart_transfers(HIF_USB_PIPE *recv_pipe,
 				  urb_context);
 
 		AR_DEBUG_PRINTF(USB_HIF_DEBUG_BULK_IN, (
-			"athusb bulk recv submit:%d, 0x%X (ep:0x%2.2X), %d bytes, buf:0x%p\n",
+			"athusb bulk recv submit:%d, 0x%X (ep:0x%2.2X), %d bytes, buf:0x%pK\n",
 			recv_pipe->logical_pipe_num,
 			recv_pipe->usb_pipe_handle,
 			recv_pipe->ep_address, buffer_length,
@@ -807,6 +812,7 @@ static void usb_hif_post_recv_prestart_transfers(HIF_USB_PIPE *recv_pipe,
 			recv_pipe->urb_prestart_cnt++;
 
 	}
+	spin_unlock_irqrestore(&recv_pipe->device->rx_prestart_lock, flags);
 
 	AR_DEBUG_PRINTF(ATH_DEBUG_TRC, ("-%s\n", __func__));
 }
@@ -848,7 +854,7 @@ static void usb_hif_post_recv_transfers(HIF_USB_PIPE *recv_pipe,
 				  usb_hif_usb_recv_complete, urb_context);
 
 		AR_DEBUG_PRINTF(USB_HIF_DEBUG_BULK_IN, (
-				 "athusb bulk recv submit:%d, 0x%X (ep:0x%2.2X), %d bytes, buf:0x%p\n",
+				 "athusb bulk recv submit:%d, 0x%X (ep:0x%2.2X), %d bytes, buf:0x%pK\n",
 				 recv_pipe->logical_pipe_num,
 				 recv_pipe->usb_pipe_handle,
 				 recv_pipe->ep_address, buffer_length,
@@ -911,7 +917,7 @@ static void usb_hif_post_recv_bundle_transfers(HIF_USB_PIPE *recv_pipe,
 				  urb_context);
 
 		AR_DEBUG_PRINTF(USB_HIF_DEBUG_BULK_IN, (
-				 "athusb bulk recv submit:%d, 0x%X (ep:0x%2.2X), %d bytes, buf:0x%p\n",
+				 "athusb bulk recv submit:%d, 0x%X (ep:0x%2.2X), %d bytes, buf:0x%pK\n",
 				 recv_pipe->logical_pipe_num,
 				 recv_pipe->usb_pipe_handle,
 				 recv_pipe->ep_address, buffer_length,
@@ -1006,7 +1012,7 @@ A_STATUS usb_hif_submit_ctrl_out(HIF_DEVICE_USB *device,
 	do {
 
 		if (size > 0) {
-			buf = kmalloc(size, GFP_KERNEL);
+			buf = vos_mem_malloc(size);
 			if (NULL == buf) {
 				ret = A_NO_MEMORY;
 				break;
@@ -1035,7 +1041,7 @@ A_STATUS usb_hif_submit_ctrl_out(HIF_DEVICE_USB *device,
 	} while (FALSE);
 
 	if (buf != NULL)
-		kfree(buf);
+		vos_mem_free(buf);
 
 	return ret;
 }
@@ -1052,7 +1058,7 @@ A_STATUS usb_hif_submit_ctrl_in(HIF_DEVICE_USB *device,
 	do {
 
 		if (size > 0) {
-			buf = kmalloc(size, GFP_KERNEL);
+			buf = vos_mem_malloc(size);
 			if (NULL == buf) {
 				ret = A_NO_MEMORY;
 				break;
@@ -1083,7 +1089,7 @@ A_STATUS usb_hif_submit_ctrl_in(HIF_DEVICE_USB *device,
 	} while (FALSE);
 
 	if (buf != NULL)
-		kfree(buf);
+		vos_mem_free(buf);
 
 	return ret;
 }
@@ -1114,7 +1120,7 @@ void usb_hif_io_comp_work(struct work_struct *work)
 		a_mem_trace(buf);
 		if (pipe->flags & HIF_USB_PIPE_FLAG_TX) {
 			AR_DEBUG_PRINTF(USB_HIF_DEBUG_BULK_OUT,
-					("+athusb xmit callback " "buf:0x%p\n",
+					("+athusb xmit callback " "buf:0x%pK\n",
 					 buf));
 			HtcHdr = (HTC_FRAME_HDR *) adf_nbuf_get_frag_vaddr(buf, 0);
 
@@ -1131,7 +1137,7 @@ void usb_hif_io_comp_work(struct work_struct *work)
 					("-athusb xmit callback\n"));
 		} else {
 			AR_DEBUG_PRINTF(USB_HIF_DEBUG_BULK_IN,
-					("+athusb recv callback buf:" "0x%p\n",
+					("+athusb recv callback buf:" "0x%pK\n",
 					 buf));
 			adf_nbuf_peek_header(buf, &data, &len);
 

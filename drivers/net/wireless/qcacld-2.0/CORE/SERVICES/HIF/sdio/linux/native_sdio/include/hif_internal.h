@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2014 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2014, 2016-2017 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -33,7 +33,6 @@
 #include "a_osapi.h"
 #include "adf_os_timer.h"
 #include "adf_os_atomic.h"
-#include "adf_os_defer.h"
 #include "hif.h"
 #include "hif_sdio_common.h"
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,24)
@@ -41,7 +40,21 @@
 #define HIF_LINUX_MMC_SCATTER_SUPPORT
 #endif
 
-#define BUS_REQUEST_MAX_NUM                64
+/**
+ * struct bus_request_record - basic bus request struct
+ * @request: request info
+ * @address: address of sdio register
+ * @len: length of register that this request will read or write
+ * @time: record time
+ */
+struct bus_request_record {
+	u_int32_t request;
+	u_int32_t address;
+	u_int32_t len;
+	u_int64_t time;
+};
+
+#define BUS_REQUEST_MAX_NUM                105
 
 #define SDIO_CLOCK_FREQUENCY_DEFAULT       25000000
 #define SDWLAN_ENABLE_DISABLE_TIMEOUT      20
@@ -120,8 +133,7 @@ struct hif_device {
     void *htcContext;
     /* mailbox swapping for control and data svc*/
     A_BOOL swap_mailbox;
-    A_BOOL wow_maskInt;
-    A_BOOL tg_ready;
+    bool ctrl_response_timeout;
 };
 
 #define HIF_DMA_BUFFER_SIZE (4 * 1024)

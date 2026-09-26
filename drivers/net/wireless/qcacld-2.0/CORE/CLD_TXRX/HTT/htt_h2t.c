@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2015 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2011-2017 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -52,6 +52,7 @@
 
 
 #include <htt_internal.h>
+#include <vos_getBin.h>
 
 #define HTT_MSG_BUF_SIZE(msg_bytes) \
    ((msg_bytes) + HTC_HEADER_LEN + HTC_HDR_ALIGNMENT_PADDING)
@@ -131,9 +132,21 @@ htt_h2t_ver_req_msg(struct htt_pdev_t *pdev)
     u_int32_t *msg_word;
     u_int32_t msg_size;
     u_int32_t max_tx_group;
+    int tx_credit_availablity = A_EINVAL;
+
+    if ((pdev->cfg.is_high_latency) &&
+        (!pdev->cfg.default_tx_comp_req)) {
+        tx_credit_availablity = ol_tx_target_credit_dec(pdev->txrx_pdev, 1);
+        if(tx_credit_availablity == A_ERROR) {
+            return A_ERROR; /* failure */
+        }
+    }
 
     pkt = htt_htc_pkt_alloc(pdev);
     if (!pkt) {
+        if (tx_credit_availablity == A_OK) {
+            ol_tx_target_credit_update(pdev->txrx_pdev, 1);
+        }
         return A_ERROR; /* failure */
     }
 
@@ -157,6 +170,9 @@ htt_h2t_ver_req_msg(struct htt_pdev_t *pdev)
         HTC_HEADER_LEN + HTC_HDR_ALIGNMENT_PADDING, 4, TRUE);
     if (!msg) {
         htt_htc_pkt_free(pdev, pkt);
+        if (tx_credit_availablity == A_OK) {
+            ol_tx_target_credit_update(pdev->txrx_pdev, 1);
+        }
         return A_ERROR; /* failure */
     }
 
@@ -205,10 +221,6 @@ htt_h2t_ver_req_msg(struct htt_pdev_t *pdev)
 #else
     HTCSendPkt(pdev->htc_pdev, &pkt->htc_pkt);
 #endif
-    if ((pdev->cfg.is_high_latency) &&
-        (!pdev->cfg.default_tx_comp_req)) {
-        ol_tx_target_credit_update(pdev->txrx_pdev, -1);
-    }
     return A_OK;
 }
 
@@ -309,6 +321,19 @@ htt_h2t_rx_ring_cfg_msg_ll(struct htt_pdev_t *pdev)
     enable_ppdu_start= 0;
     enable_ppdu_end  = 0;
 #endif
+    if (VOS_MONITOR_MODE == vos_get_conparam()) {
+        enable_ctrl_data = 1;
+        enable_mgmt_data = 1;
+        enable_null_data = 1;
+        enable_phy_data  = 1;
+        enable_hdr       = 1;
+        enable_ppdu_start= 1;
+        enable_ppdu_end  = 1;
+        /* Disable ASPM for monitor mode */
+        adf_os_print("Monitor mode is enabled\n");
+        htt_htc_disable_aspm();
+    }
+
     HTT_RX_RING_CFG_ENABLED_802_11_HDR_SET(*msg_word, enable_hdr);
     HTT_RX_RING_CFG_ENABLED_MSDU_PAYLD_SET(*msg_word, 1);
     HTT_RX_RING_CFG_ENABLED_PPDU_START_SET(*msg_word, enable_ppdu_start);
@@ -391,9 +416,20 @@ htt_h2t_rx_ring_cfg_msg_hl(struct htt_pdev_t *pdev)
     struct htt_htc_pkt *pkt;
     adf_nbuf_t msg;
     u_int32_t *msg_word;
+    int tx_credit_availablity = A_EINVAL;
+
+    if (!pdev->cfg.default_tx_comp_req) {
+        tx_credit_availablity = ol_tx_target_credit_dec(pdev->txrx_pdev, 1);
+        if(tx_credit_availablity == A_ERROR) {
+            return A_ERROR; /* failure */
+        }
+    }
 
     pkt = htt_htc_pkt_alloc(pdev);
     if (!pkt) {
+        if (tx_credit_availablity == A_OK) {
+            ol_tx_target_credit_update(pdev->txrx_pdev, 1);
+        }
         return A_ERROR; /* failure */
     }
 
@@ -408,6 +444,9 @@ htt_h2t_rx_ring_cfg_msg_hl(struct htt_pdev_t *pdev)
         HTC_HEADER_LEN + HTC_HDR_ALIGNMENT_PADDING, 4, TRUE);
     if (!msg) {
         htt_htc_pkt_free(pdev, pkt);
+        if (tx_credit_availablity == A_OK) {
+            ol_tx_target_credit_update(pdev->txrx_pdev, 1);
+        }
         return A_ERROR; /* failure */
     }
     /*
@@ -518,9 +557,6 @@ htt_h2t_rx_ring_cfg_msg_hl(struct htt_pdev_t *pdev)
 #else
     HTCSendPkt(pdev->htc_pdev, &pkt->htc_pkt);
 #endif
-    if (!pdev->cfg.default_tx_comp_req) {
-        ol_tx_target_credit_update(pdev->txrx_pdev, -1);
-    }
     return A_OK;
 }
 
@@ -537,10 +573,22 @@ htt_h2t_dbg_stats_get(
     adf_nbuf_t msg;
     u_int32_t *msg_word;
     uint16_t htc_tag = 1;
+    int tx_credit_availablity = A_EINVAL;
+
+    if ((pdev->cfg.is_high_latency) &&
+        (!pdev->cfg.default_tx_comp_req)) {
+        tx_credit_availablity = ol_tx_target_credit_dec(pdev->txrx_pdev, 1);
+        if(tx_credit_availablity == A_ERROR) {
+            return A_ERROR; /* failure */
+        }
+    }
 
     pkt = htt_htc_pkt_alloc(pdev);
     if (!pkt) {
-        return -1; /* failure */
+        if (tx_credit_availablity == A_OK) {
+            ol_tx_target_credit_update(pdev->txrx_pdev, 1);
+        }
+        return A_ERROR; /* failure */
     }
 
     if (stats_type_upload_mask >= 1 << HTT_DBG_NUM_STATS ||
@@ -549,7 +597,11 @@ htt_h2t_dbg_stats_get(
         /* FIX THIS - add more details? */
         adf_os_print("%#x %#x stats not supported\n",
             stats_type_upload_mask, stats_type_reset_mask);
-        return -1; /* failure */
+        htt_htc_pkt_free(pdev, pkt);
+        if (tx_credit_availablity == A_OK) {
+            ol_tx_target_credit_update(pdev->txrx_pdev, 1);
+        }
+        return A_ERROR; /* failure */
     }
 
     if (stats_type_reset_mask)
@@ -566,7 +618,10 @@ htt_h2t_dbg_stats_get(
         HTC_HEADER_LEN + HTC_HDR_ALIGNMENT_PADDING, 4, FALSE);
     if (!msg) {
         htt_htc_pkt_free(pdev, pkt);
-        return -1; /* failure */
+        if (tx_credit_availablity == A_OK) {
+            ol_tx_target_credit_update(pdev->txrx_pdev, 1);
+        }
+        return A_ERROR; /* failure */
     }
     /* set the length of the message */
     adf_nbuf_put_tail(msg, HTT_H2T_STATS_REQ_MSG_SZ);
@@ -615,10 +670,6 @@ htt_h2t_dbg_stats_get(
 #else
     HTCSendPkt(pdev->htc_pdev, &pkt->htc_pkt);
 #endif
-    if ((pdev->cfg.is_high_latency) &&
-        (!pdev->cfg.default_tx_comp_req)) {
-        ol_tx_target_credit_update(pdev->txrx_pdev, -1);
-    }
     return 0;
 }
 
@@ -628,9 +679,21 @@ htt_h2t_sync_msg(struct htt_pdev_t *pdev, u_int8_t sync_cnt)
     struct htt_htc_pkt *pkt;
     adf_nbuf_t msg;
     u_int32_t *msg_word;
+    int tx_credit_availablity = A_EINVAL;
+
+    if ((pdev->cfg.is_high_latency) &&
+        (!pdev->cfg.default_tx_comp_req)) {
+        tx_credit_availablity = ol_tx_target_credit_dec(pdev->txrx_pdev, 1);
+        if(tx_credit_availablity == A_ERROR) {
+            return A_ERROR; /* failure */
+        }
+    }
 
     pkt = htt_htc_pkt_alloc(pdev);
     if (!pkt) {
+        if (tx_credit_availablity == A_OK) {
+            ol_tx_target_credit_update(pdev->txrx_pdev, 1);
+        }
         return A_NO_MEMORY;
     }
 
@@ -676,10 +739,6 @@ htt_h2t_sync_msg(struct htt_pdev_t *pdev, u_int8_t sync_cnt)
 #else
     HTCSendPkt(pdev->htc_pdev, &pkt->htc_pkt);
 #endif
-    if ((pdev->cfg.is_high_latency) &&
-        (!pdev->cfg.default_tx_comp_req)) {
-        ol_tx_target_credit_update(pdev->txrx_pdev, -1);
-    }
     return A_OK;
 }
 
@@ -691,10 +750,22 @@ htt_h2t_aggr_cfg_msg(struct htt_pdev_t *pdev,
     struct htt_htc_pkt *pkt;
     adf_nbuf_t msg;
     u_int32_t *msg_word;
+    int tx_credit_availablity = A_EINVAL;
+
+    if ((pdev->cfg.is_high_latency) &&
+        (!pdev->cfg.default_tx_comp_req)) {
+        tx_credit_availablity = ol_tx_target_credit_dec(pdev->txrx_pdev, 1);
+        if(tx_credit_availablity == A_ERROR) {
+            return A_ERROR; /* failure */
+        }
+    }
 
     pkt = htt_htc_pkt_alloc(pdev);
     if (!pkt) {
-        return -1; /* failure */
+        if (tx_credit_availablity == A_OK) {
+            ol_tx_target_credit_update(pdev->txrx_pdev, 1);
+        }
+        return A_ERROR; /* failure */
     }
 
     /* show that this is not a tx frame download (not required, but helpful) */
@@ -708,7 +779,10 @@ htt_h2t_aggr_cfg_msg(struct htt_pdev_t *pdev,
         HTC_HEADER_LEN + HTC_HDR_ALIGNMENT_PADDING, 4, FALSE);
     if (!msg) {
         htt_htc_pkt_free(pdev, pkt);
-        return -1; /* failure */
+        if (tx_credit_availablity == A_OK) {
+            ol_tx_target_credit_update(pdev->txrx_pdev, 1);
+        }
+        return A_ERROR; /* failure */
     }
     /* set the length of the message */
     adf_nbuf_put_tail(msg, HTT_AGGR_CFG_MSG_SZ);
@@ -746,10 +820,6 @@ htt_h2t_aggr_cfg_msg(struct htt_pdev_t *pdev,
 #else
     HTCSendPkt(pdev->htc_pdev, &pkt->htc_pkt);
 #endif
-    if ((pdev->cfg.is_high_latency) &&
-        (!pdev->cfg.default_tx_comp_req)) {
-        ol_tx_target_credit_update(pdev->txrx_pdev, -1);
-    }
     return 0;
 }
 

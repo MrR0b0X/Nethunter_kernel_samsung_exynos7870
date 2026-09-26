@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2014 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2017 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -149,7 +149,7 @@ eHalStatus csrTdlsSendMgmtReq(tHalHandle hHal, tANI_U8 sessionId, tCsrTdlsSendMg
 }
 
 /*
- * TDLS request API, called from HDD to add a TDLS peer
+ * TDLS request API, called from HDD to modify an existing TDLS peer
  */
 eHalStatus csrTdlsChangePeerSta(tHalHandle hHal,
                                 tANI_U8 sessionId,
@@ -160,6 +160,8 @@ eHalStatus csrTdlsChangePeerSta(tHalHandle hHal,
     tSmeCmd *tdlsAddStaCmd ;
     eHalStatus status = eHAL_STATUS_FAILURE ;
 
+    if (NULL == pstaParams)
+        return status;
     //If connected and in Infra. Only then allow this
     if (CSR_IS_SESSION_VALID( pMac, sessionId ) &&
         csrIsConnStateConnectedInfra( pMac, sessionId ) &&
@@ -741,8 +743,10 @@ eHalStatus tdlsMsgProcessor(tpAniSirGlobal pMac,  v_U16_t msgType,
             csrRoamCallCallback(pMac, delStaRsp->sessionId, &roamInfo, 0,
                          eCSR_ROAM_TDLS_STATUS_UPDATE,
                                eCSR_ROAM_RESULT_DELETE_TDLS_PEER);
-
-            csrTdlsRemoveSmeCmd(pMac, eSmeCommandTdlsDelPeer) ;
+            csrTdlsRemoveSmeCmd(pMac, eSmeCommandTdlsDelPeer);
+            csrRoamCallCallback(pMac, delStaRsp->sessionId, &roamInfo, 0,
+                            eCSR_ROAM_TDLS_STATUS_UPDATE,
+                            eCSR_ROAM_TDLS_CHECK_BMPS);
         }
         break;
         case eWNI_SME_TDLS_DEL_STA_IND:
@@ -781,6 +785,10 @@ eHalStatus tdlsMsgProcessor(tpAniSirGlobal pMac,  v_U16_t msgType,
         case eWNI_SME_TDLS_LINK_ESTABLISH_RSP:
         {
             tSirTdlsLinkEstablishReqRsp *linkEstablishReqRsp = (tSirTdlsLinkEstablishReqRsp *) pMsgBuf ;
+            vos_mem_copy(&roamInfo.peerMac, linkEstablishReqRsp->peerMac,
+                                            sizeof(tSirMacAddr));
+            roamInfo.staId = (uint8_t)linkEstablishReqRsp->sta_idx;
+            roamInfo.statusCode = linkEstablishReqRsp->statusCode;
             csrRoamCallCallback(pMac, linkEstablishReqRsp->sessionId, &roamInfo, 0,
                          eCSR_ROAM_TDLS_STATUS_UPDATE,
                                eCSR_ROAM_RESULT_LINK_ESTABLISH_REQ_RSP);

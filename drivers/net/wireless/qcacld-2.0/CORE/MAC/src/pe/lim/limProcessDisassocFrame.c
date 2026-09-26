@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2014 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2011-2018 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -77,12 +77,13 @@ limProcessDisassocFrame(tpAniSirGlobal pMac, tANI_U8 *pRxPacketInfo, tpPESession
     tpSirMacMgmtHdr    pHdr;
     tpDphHashNode      pStaDs;
     tLimMlmDisassocInd mlmDisassocInd;
+#ifdef WLAN_FEATURE_11W
     tANI_U32            frameLen;
+#endif
     int8_t frame_rssi;
 
     pHdr = WDA_GET_RX_MAC_HEADER(pRxPacketInfo);
     pBody = WDA_GET_RX_MPDU_DATA(pRxPacketInfo);
-    frameLen = WDA_GET_RX_PAYLOAD_LEN(pRxPacketInfo);
     frame_rssi = (int8_t)WDA_GET_RX_RSSI_NORMALIZED(pRxPacketInfo);
 
     if (limIsGroupAddr(pHdr->sa))
@@ -111,24 +112,19 @@ limProcessDisassocFrame(tpAniSirGlobal pMac, tANI_U8 *pRxPacketInfo, tpPESession
     }
 
     if (LIM_IS_STA_ROLE(psessionEntry) &&
-        (eLIM_SME_WT_DISASSOC_STATE == psessionEntry->limSmeState)) {
-        if (pHdr->fc.retry > 0) {
-            /*
-             * This can happen when first disassoc frame is received
-             * but ACK from this STA is lost, in this case 2nd disassoc frame is
-             * already in transmission queue
-             */
-            PELOGE(limLog(pMac, LOGE,
-                   FL("AP is sending disassoc after ACK lost..."));)
-            return;
+        ((eLIM_SME_WT_DISASSOC_STATE == psessionEntry->limSmeState) ||
+         (eLIM_SME_WT_DEAUTH_STATE == psessionEntry->limSmeState))) {
+        /*Every 15th deauth frame will be logged in kmsg*/
+        if(!(psessionEntry->disassocmsgcnt & 0xF)) {
+                limLog(pMac, LOGE,
+                       FL("Already processing previously received DEAUTH/Disassoc..Dropping this.. Deauth Failed cnt %d"),
+                       ++psessionEntry->disassocmsgcnt);
+        } else {
+            psessionEntry->disassocmsgcnt++;
         }
-
-    }
-
-    if (frameLen < 2) {
-        PELOGE(limLog(pMac, LOGE, FL("frame len less than 2"));)
         return;
     }
+
 
 #ifdef WLAN_FEATURE_11W
     /* PMF: If this session is a PMF session, then ensure that this frame was protected */
@@ -137,6 +133,7 @@ limProcessDisassocFrame(tpAniSirGlobal pMac, tANI_U8 *pRxPacketInfo, tpPESession
         PELOGE(limLog(pMac, LOGE, FL("received an unprotected disassoc from AP"));)
         // If the frame received is unprotected, forward it to the supplicant to initiate
         // an SA query
+        frameLen = WDA_GET_RX_PAYLOAD_LEN(pRxPacketInfo);
         //send the unprotected frame indication to SME
         limSendSmeUnprotectedMgmtFrameInd( pMac, pHdr->fc.subType,
                                            (tANI_U8*)pHdr, (frameLen + sizeof(tSirMacMgmtHdr)),
@@ -250,6 +247,8 @@ limProcessDisassocFrame(tpAniSirGlobal pMac, tANI_U8 *pRxPacketInfo, tpPESession
             case eSIR_MAC_RSN_IE_MISMATCH_REASON:
             case eSIR_MAC_1X_AUTH_FAILURE_REASON:
             case eSIR_MAC_PREV_AUTH_NOT_VALID_REASON:
+            case eSIR_MAC_PEER_REJECT_MECHANISIM_REASON:
+            case eSIR_MAC_XS_UNACKED_FRAMES_REASON:
                 // Valid reasonCode in received Disassociation frame
                 break;
 
@@ -267,13 +266,7 @@ limProcessDisassocFrame(tpAniSirGlobal pMac, tANI_U8 *pRxPacketInfo, tpPESession
                 break;
 
             default:
-                // Invalid reasonCode in received Disassociation frame
-                // Log error and ignore the frame
-                PELOGE(limLog(pMac, LOGE,
-                       FL("received Disassoc frame with invalid reasonCode "
-                       "%d from "MAC_ADDRESS_STR), reasonCode,
-                       MAC_ADDR_ARRAY(pHdr->sa));)
-                return;
+                break;
         }
     }
     else
@@ -304,6 +297,15 @@ limProcessDisassocFrame(tpAniSirGlobal pMac, tANI_U8 *pRxPacketInfo, tpPESession
         return;
     }
 
+#ifdef FEATURE_WLAN_TDLS
+    /* Delete all the TDLS peers only if Disassoc is received from the AP */
+    if ((LIM_IS_STA_ROLE(psessionEntry)) &&
+        ((pStaDs->mlmStaContext.mlmState == eLIM_MLM_LINK_ESTABLISHED_STATE) ||
+        (pStaDs->mlmStaContext.mlmState == eLIM_MLM_IDLE_STATE)) &&
+        (IS_CURRENT_BSSID(pMac, pHdr->sa, psessionEntry)))
+        limDeleteTDLSPeers(pMac, psessionEntry);
+#endif
+
     if (pStaDs->mlmStaContext.mlmState != eLIM_MLM_LINK_ESTABLISHED_STATE)
     {
         /**
@@ -333,6 +335,13 @@ limProcessDisassocFrame(tpAniSirGlobal pMac, tANI_U8 *pRxPacketInfo, tpPESession
 
     /* Update PE session Id  */
     mlmDisassocInd.sessionId = psessionEntry->peSessionId;
+
+    /*
+     * reset the deauthMsgCnt here since we are able to Process
+     * the deauth frame and sending up the indication as well
+     */
+     if (psessionEntry->disassocmsgcnt != 0)
+         psessionEntry->disassocmsgcnt = 0;
 
     if (limIsReassocInProgress(pMac,psessionEntry)) {
 
